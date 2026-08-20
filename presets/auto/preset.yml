@@ -1,0 +1,6 @@
+name: Auto
+description: >-
+  Auto mode with a quota-aware routing advisor: consult route_consult before
+  subagents and large tasks (requires the dsh-quota-autopilot host plugin).
+  带路由顾问的 Auto 模式：派子代理或开大任务前先咨询 route_consult（需先安装
+  dsh-quota-autopilot 宿主插件）。

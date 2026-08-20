@@ -1,0 +1,12 @@
+node_modules/
+.npm-cache/
+*.log
+.DS_Store
+Thumbs.db
+
+# Never commit credentials or personal data
+.credentials.yaml
+*.key
+secrets/
+test-profile/
+coverage/

@@ -1,0 +1,43 @@
+{
+  "name": "dsh-quota-autopilot",
+  "version": "0.1.0",
+  "description": "Quota-aware model routing advisor for dsh (DeepSeek Harness): polls provider quotas, auto-learns your subscription's point-to-token ratio, and recommends role-based routes. Advisory only — it never changes actual routing.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./advisor": "./advisor.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "advisor.mjs",
+    "src/",
+    "presets/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "quota",
+    "routing",
+    "kimi",
+    "deepseek"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Spencermona/dsh-quota-autopilot.git"
+  },
+  "bugs": "https://github.com/Spencermona/dsh-quota-autopilot/issues",
+  "homepage": "https://github.com/Spencermona/dsh-quota-autopilot#readme"
+}
