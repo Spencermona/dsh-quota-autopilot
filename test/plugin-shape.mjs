@@ -15,6 +15,7 @@ import path from 'node:path'
 
 import * as hostPlugin from '../index.mjs'
 import * as advisor from '../advisor.mjs'
+import { openLedger } from '../src/ledger.mjs'
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-autopilot-shape-'))
@@ -229,6 +230,90 @@ test('default-model fallback fills main when knowledge base cannot', async () =>
   assert.equal(rr.roles.main.model, 'k3')
   assert.equal(rr.sources.main, 'deployment-default')
   assert.equal(rr.roles.worker, null)
+
+  for (const c of cleanups) c()
+})
+
+test('stale quota fields are excluded from state, surfaced in notes', async () => {
+  const dir = tmpdir()
+  const dshHome = path.join(dir, 'dsh-home')
+  const dataDir = path.join(dir, 'data')
+  fs.mkdirSync(dshHome, { recursive: true })
+  const { ctx, provided, cleanups } = mockCtx({ llm: fullLlm })
+
+  await hostPlugin.apply(ctx, { dshHome, dataDir, poll: { staleAfterMin: 15 } })
+  const svc = provided.autopilot
+  assert.ok(await waitFor(() => svc.status().poll !== null))
+
+  // Write a stale weekly snapshot (remaining 1 would normally trigger
+  // EMERGENCY) directly into the plugin's ledger via a second handle.
+  const db = openLedger(path.join(dataDir, 'ledger.db'))
+  const now = Date.now()
+  db.prepare(`INSERT INTO account_snapshots(collected_at,provider,window_type,"limit",remaining) VALUES(?,?,?,?,?)`)
+    .run(now - 20 * 60e3, 'kimi-coding', 'weekly', 100, 1)
+  db.close()
+
+  const st = svc.status()
+  assert.equal(st.quota.kimiWeeklyRemaining, 1)          // value still visible
+  assert.equal(st.quota.freshness.kimiWeekly.stale, true) // ...but marked stale
+  assert.equal(st.state, 'NORMAL')                        // stale excluded -> no EMERGENCY
+  assert.ok(st.notes.some((n) => n.includes('kimiWeekly') && n.includes('stale')))
+
+  // advise must not let the stale low-remaining value force a downgrade either
+  const adv = await svc.advise({ task: 'fix a test', type: 'coding', estTokens: 30000 })
+  assert.equal(adv.quotaState, 'NORMAL')
+  assert.ok(adv.notes.some((n) => n.includes('kimiWeekly') && n.includes('stale')))
+
+  for (const c of cleanups) c()
+})
+
+test('panel: mounts /autopilot/api/status only when webServer is present', async () => {
+  const dir = tmpdir()
+  const dshHome = path.join(dir, 'dsh-home')
+  const dataDir = path.join(dir, 'data')
+  fs.mkdirSync(dshHome, { recursive: true })
+  const routes = []
+  const ws = { register: (def) => { routes.push(def); return () => {} } }
+  const { ctx, provided, cleanups } = mockCtx({ llm: fullLlm, webServer: ws })
+
+  await hostPlugin.apply(ctx, { dshHome, dataDir, panel: { codex: false, local: false } })
+  const svc = provided.autopilot
+  assert.ok(await waitFor(() => svc.status().poll !== null))
+
+  const route = routes.find((r) => r.path === '/autopilot/api/status')
+  assert.ok(route, 'panel route must be registered when webServer exists')
+
+  let body = null
+  await route.handler({ method: 'GET' }, { writeHead: () => {}, end: (s) => { body = s } })
+  const j = JSON.parse(body)
+  assert.ok(j.panel && typeof j.panel.staleMs === 'number')
+  assert.ok(j.kimi && 'weekly' in j.kimi && 'rolling5h' in j.kimi)
+  assert.ok('balanceUsd' in j.deepseek)
+  assert.ok('todayUsd' in j.cost && 'incomplete' in j.cost)
+  assert.ok('codex' in j && 'local' in j)
+  assert.equal(j.updatedAt === null || typeof j.updatedAt === 'number', true)
+  // codex/local probing disabled in this test -> null, not absent
+  assert.equal(j.codex, null)
+  assert.equal(j.local, null)
+
+  let status405 = null
+  await route.handler({ method: 'POST' }, { writeHead: (c) => { status405 = c }, end: () => {} })
+  assert.equal(status405, 405)
+
+  for (const c of cleanups) c()
+})
+
+test('panel: absent webServer -> no route, plugin still mounts', async () => {
+  const dir = tmpdir()
+  const dshHome = path.join(dir, 'dsh-home')
+  const dataDir = path.join(dir, 'data')
+  fs.mkdirSync(dshHome, { recursive: true })
+  const { ctx, provided, cleanups } = mockCtx({ llm: fullLlm }) // no webServer
+
+  await hostPlugin.apply(ctx, { dshHome, dataDir })
+  const svc = provided.autopilot
+  assert.ok(await waitFor(() => svc.status().poll !== null))
+  assert.equal(svc.status().ok, true) // mounts and serves status without webServer
 
   for (const c of cleanups) c()
 })

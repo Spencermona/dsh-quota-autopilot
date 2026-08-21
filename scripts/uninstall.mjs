@@ -46,11 +46,16 @@ Manual steps remaining:
 
      dsh plugin --profile web remove dsh-quota-autopilot
 
-3. Optional: delete the plugin data directory (ledger, calibration, shadow
+3. If you also had the standalone dsh-quota-panel (pre-v0.2.0 GUI), remove it
+   and its insert row (id: quota-panel) as well:
+
+     dsh plugin --profile web remove dsh-quota-panel
+
+4. Optional: delete the plugin data directory (ledger, calibration, shadow
    log). It lives at ONE of:
 
      <profile directory>/data/dsh-quota-autopilot        (profile install)
      ${path.join(dshHome, 'plugin-data', 'dsh-quota-autopilot')}   (fallback)
 
-4. Restart dsh.
+5. Restart dsh.
 `)

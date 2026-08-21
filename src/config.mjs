@@ -18,6 +18,9 @@ export const DEFAULT_CONFIG = {
     kimiUsageUrl: 'https://api.kimi.com/coding/v1/usages',   // plural! singular /v1/usage is 404
     deepseekBalanceUrl: 'https://api.deepseek.com/user/balance',
     timeoutMs: 15000,
+    // A snapshot older than this is "stale": it stays visible in quota output
+    // (with freshness metadata) but is excluded from state/routing decisions.
+    staleAfterMin: 15,
   },
 
   // --- budget ---
@@ -31,6 +34,20 @@ export const DEFAULT_CONFIG = {
     minSpanHours: 24,
     minPointDelta: 3,
     driftRelearnPct: 30,
+  },
+
+  // --- GUI panel (optional web readout) ---
+  // Mounted only when the webServer service is present (web profile). Colors
+  // the composer-dock pill; Codex/local probing can be toggled off. staleMs
+  // defaults to poll.staleAfterMin when unset (see src/panel.mjs).
+  panel: {
+    codex: true,
+    local: true,
+    dailyCapUsd: 2.0,
+    lowPoints: 10,
+    warnPoints: 25,
+    warnBalanceUsd: 5,
+    lowBalanceUsd: 1,
   },
 
   // --- roles: user overrides. Empty by default -> knowledge base + probing fills. ---

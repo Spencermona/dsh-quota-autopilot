@@ -17,6 +17,7 @@ import { calibrate, loadCalibration, saveCalibration } from '../src/calibrate.mj
 import { appendShadow, readShadow } from '../src/shadow.mjs'
 import { pollAll } from '../src/poll.mjs'
 import { mergeConfig, DEFAULT_CONFIG } from '../src/config.mjs'
+import { quotaSnapshot, deepseekTodayUsd, stripStale } from '../src/quota.mjs'
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-autopilot-test-'))
@@ -411,4 +412,125 @@ test('poll: missing credentials -> error status, (missing) hints, no fetch', asy
   }
   assert.equal(fetched, false)
   db.close()
+})
+
+// ---------- quota.mjs ----------
+
+test('config: poll.staleAfterMin default + deep-merge override', () => {
+  assert.equal(DEFAULT_CONFIG.poll.staleAfterMin, 15)
+  assert.equal(mergeConfig().poll.staleAfterMin, 15)
+  assert.equal(mergeConfig({ poll: { staleAfterMin: 30 } }).poll.staleAfterMin, 30)
+  // unrelated poll fields preserved
+  assert.equal(mergeConfig({ poll: { staleAfterMin: 30 } }).poll.timeoutMs, DEFAULT_CONFIG.poll.timeoutMs)
+})
+
+test('quota: quotaSnapshot attaches per-source freshness (collectedAt/ageMs/stale)', () => {
+  const db = openLedger(':memory:')
+  const now = 1_700_000_000_000
+  insertSnapshot(db, { collected_at: now - 20 * 60e3, provider: 'kimi-coding', window_type: 'weekly', limit: 100, remaining: 50 })
+  insertSnapshot(db, { collected_at: now - 2 * 60e3, provider: 'kimi-coding', window_type: 'rolling_5h', limit: 100, remaining: 80 })
+  insertSnapshot(db, { collected_at: now - 1 * 60e3, provider: 'deepseek-official', window_type: 'balance', remaining: 12.5 })
+  const q = quotaSnapshot(db, { poll: { staleAfterMin: 15 } }, now)
+  assert.equal(q.kimiWeeklyRemaining, 50)
+  assert.equal(q.kimiWeeklyLimit, 100)
+  assert.equal(q.kimiRolling5hRemaining, 80)
+  assert.equal(q.kimiRolling5hLimit, 100)
+  assert.equal(q.deepseekBalanceUsd, 12.5)
+  // per-source freshness
+  assert.equal(q.freshness.kimiWeekly.stale, true)      // 20 min > 15 min
+  assert.equal(q.freshness.kimiRolling5h.stale, false)  // 2 min
+  assert.equal(q.freshness.deepseekBalance.stale, false) // 1 min
+  assert.equal(q.freshness.kimiWeekly.collectedAt, now - 20 * 60e3)
+  assert.equal(q.freshness.kimiWeekly.ageMs, 20 * 60e3)
+  db.close()
+})
+
+test('quota: stripStale nulls stale polled fields, preserves computed fields', () => {
+  const quota = {
+    kimiWeeklyRemaining: 50, kimiWeeklyLimit: 100, kimiWeeklyResetTime: '2026-08-23T21:07:41Z',
+    kimiRolling5hRemaining: 80, kimiRolling5hLimit: 100,
+    deepseekBalanceUsd: 12.5,
+    deepseekTodayUsd: 0.1,
+    freshness: {
+      kimiWeekly: { collectedAt: 1, ageMs: 20 * 60e3, stale: true },
+      kimiRolling5h: { collectedAt: 2, ageMs: 2 * 60e3, stale: false },
+      deepseekBalance: { collectedAt: 3, ageMs: 1 * 60e3, stale: false },
+    },
+  }
+  const { quota: fresh, staleNotes } = stripStale(quota)
+  assert.equal(fresh.kimiWeeklyRemaining, null)
+  assert.equal(fresh.kimiWeeklyLimit, null)
+  assert.equal(fresh.kimiWeeklyResetTime, null)
+  assert.equal(fresh.kimiRolling5hRemaining, 80)   // fresh -> kept
+  assert.equal(fresh.deepseekBalanceUsd, 12.5)     // fresh -> kept
+  assert.equal(fresh.deepseekTodayUsd, 0.1)        // computed -> never stale
+  assert.equal(staleNotes.length, 1)
+  assert.ok(staleNotes[0].includes('kimiWeekly'))
+  assert.ok(staleNotes[0].includes('stale'))
+})
+
+test('quota: incomplete DeepSeek cost is display-only and excluded from decisions', () => {
+  const full = {
+    deepseekTodayUsd: 0.25,
+    deepseekToday: { todayUsd: 0.25, incomplete: true, unknownModels: ['mystery-model'] },
+    freshness: {},
+  }
+  const { quota: safe } = stripStale(full)
+  assert.equal(full.deepseekTodayUsd, 0.25) // lower bound remains visible
+  assert.equal(safe.deepseekTodayUsd, null) // but cannot drive state/router
+  assert.equal(safe.deepseekToday.incomplete, true)
+})
+
+test('quota: deepseekTodayUsd known rate -> exact cost, not incomplete', () => {
+  const db = openLedger(':memory:')
+  seedRates(db)
+  const now = new Date(2026, 7, 20, 12, 0, 0) // local noon, Aug 20 2026
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0)
+  const ts = midnight.getTime() + 3600e3 // 1h after local midnight -> today
+  insertEvent(db, { session_id: 'q1', seq: 1, ts, provider: 'deepseek-official', model: 'deepseek-v4-pro', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 })
+  const r = deepseekTodayUsd(db, now)
+  assert.ok(r && typeof r === 'object')
+  assert.equal(r.incomplete, false)
+  assert.deepEqual(r.unknownModels, [])
+  const h = new Date(ts).getUTCHours()
+  const pp = (h >= 1 && h < 4) || (h >= 6 && h < 10) ? 'peak' : 'offpeak'
+  const rate = RATE_SEED.find(([p, m, b]) => p === 'deepseek-official' && m === 'deepseek-v4-pro' && b === 'input_' + pp)[3]
+  assert.equal(r.todayUsd, Number((1_000_000 * rate / 1e6).toFixed(4)))
+  db.close()
+})
+
+test('quota: deepseekTodayUsd unknown rate -> incomplete + unknownModels, never silent-zero', () => {
+  const db = openLedger(':memory:')
+  seedRates(db)
+  const now = new Date(2026, 7, 20, 12, 0, 0)
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0)
+  const ts = midnight.getTime() + 3600e3
+  insertEvent(db, { session_id: 'q2', seq: 1, ts, provider: 'deepseek-official', model: 'deepseek-v4-pro', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 })
+  insertEvent(db, { session_id: 'q2', seq: 2, ts, provider: 'deepseek-official', model: 'mystery-model', input_tokens: 500_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 })
+  const r = deepseekTodayUsd(db, now)
+  assert.equal(r.incomplete, true)
+  assert.deepEqual(r.unknownModels, ['mystery-model'])
+  // only the known model is counted; the unknown rate is NOT padded with 0
+  const h = new Date(ts).getUTCHours()
+  const pp = (h >= 1 && h < 4) || (h >= 6 && h < 10) ? 'peak' : 'offpeak'
+  const rate = RATE_SEED.find(([p, m, b]) => p === 'deepseek-official' && m === 'deepseek-v4-pro' && b === 'input_' + pp)[3]
+  assert.equal(r.todayUsd, Number((1_000_000 * rate / 1e6).toFixed(4)))
+  db.close()
+})
+
+test('quota: deepseekTodayUsd no events -> todayUsd 0, incomplete false (real zero)', () => {
+  const db = openLedger(':memory:')
+  seedRates(db)
+  const r = deepseekTodayUsd(db, new Date(2026, 7, 20, 12, 0, 0))
+  assert.deepEqual(r, { todayUsd: 0, incomplete: false, unknownModels: [] })
+  db.close()
+})
+
+test('quota: deepseekTodayUsd unreadable ledger -> todayUsd null, incomplete true', () => {
+  const db = openLedger(':memory:')
+  db.close()
+  const r = deepseekTodayUsd(db, new Date())
+  assert.equal(r.todayUsd, null)
+  assert.equal(r.incomplete, true)
+  assert.deepEqual(r.unknownModels, [])
 })

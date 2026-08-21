@@ -1,76 +1,73 @@
-# READY-FOR-PUBLISH — dsh-autopilot v0.1.0 发布检查清单
+# READY-FOR-PUBLISH — dsh-quota-autopilot v0.2.0 发布检查清单
 
-> ⚠️ 2026-08-20 改名：npm 包名由 dsh-autopilot 更名为 dsh-quota-autopilot（原名被占用），repo 为 Spencermona/dsh-quota-autopilot。
-
+> ⚠️ 包名：`dsh-quota-autopilot`（原名 dsh-autopilot 被占用），repo 为 Spencermona/dsh-quota-autopilot。
+> v0.2.0 变更：并入独立 `dsh-quota-panel` 的 GUI 胶囊 + 数据新鲜度/stale 语义 + DeepSeek 今日花费 incomplete 语义。
 > 每项附证据。状态：⏳ 验收进行中 / ✅ 已验证 / ❌ 阻塞
-> 生成时间：2026-08-19；验收已于当日完成（§5 全部实测通过）
+> 生成时间：v0.2.0 发布候选；自动测试已全绿（§3），隔离 web profile 验收见 §5。
 
 ## 1. 功能完整性
 
 | # | 检查项 | 状态 | 证据 |
 |---|---|---|---|
-| 1.1 | 角色制路由：四角色 main/worker/long-context/reviewer，规则只引用角色名 | ✅ | `src/router-core.mjs`（`ROLES` 导出、route() 按角色解析）；`src/config.mjs` rules/modifiers 全部 role 引用 |
-| 1.2 | 内置知识库 + 启动探测填角色 | ✅ | `src/roles.mjs` KNOWLEDGE_BASE + resolveRoles（listProviders/listModels 门控）；plugin-shape 测试 5/5 |
-| 1.3 | 未知模型不参与路由（防烧钱护栏），用户显式映射是唯一例外 | ✅ | router-core.mjs 不可解析角色跳过逻辑；plugin-shape 测试 'user override is the only way an unknown model enters routing' |
-| 1.4 | provider 未配置时 main 回退部署默认模型 | ✅ | roles.mjs Priority 3（agentDefaultModel.currentSelection）；plugin-shape 测试 'default-model fallback fills main' |
-| 1.5 | 自动标定：≥24h 且净增 ≥3 点才 calibrated，此前一律 learning | ✅ | `src/calibrate.mjs` 显式门槛；unit 测试 'calibrate: learning -> calibrated with explicit gates' 等 4 例 |
-| 1.6 | 路由顾问只建议不动手，shadow 日志落本机 | ✅ | 全仓无 agent/request 改写、无 saveSelection 调用；advise() 写 shadow-log.jsonl（plugin-shape 测试验证） |
-| 1.7 | Auto preset 仅其会话启用顾问，其他 preset 零感知 | ✅ | 结构性：advisor 行只在 presets/auto/agent.cordis.yml；运行时：auto 会话创建成功且 roster 无 broken，standard 会话正常，卸载后 roster 恢复原样（§5.3/5.4/5.7） |
+| 1.1 | 角色制路由（四角色、规则只引用角色名） | ✅ | `src/router-core.mjs` + `src/config.mjs`；沿用 v0.1.0 已验证实现 |
+| 1.2 | 内置知识库 + 启动探测填角色 | ✅ | `src/roles.mjs`；plugin-shape 测试 8/8 |
+| 1.3 | 未知模型不参与路由（防烧钱护栏） | ✅ | router-core 护栏 + plugin-shape 测试 'user override is the only way…' |
+| 1.4 | 自动标定（≥24h 且净增 ≥3 点才 calibrated） | ✅ | `src/calibrate.mjs`；unit 测试 4 例 |
+| 1.5 | 路由顾问只建议不动手，shadow 日志落本机 | ✅ | 无路由改写代码；advise() 写 shadow-log.jsonl |
+| 1.6 | 数据新鲜度：`poll.staleAfterMin` 配置 + schema/校验 + 逐来源 freshness | ✅ | `src/config.mjs`(staleAfterMin=15) + `src/quota.mjs`(quotaSnapshot/freshnessOf/stripStale)；unit 测试 'quota: quotaSnapshot…'/'stripStale…' |
+| 1.7 | 陈旧额度字段不参与 evalState/route | ✅ | index.mjs advise/status 经 stripStale 后再喂 evalState/route；plugin-shape 测试 'stale quota fields are excluded…' |
+| 1.8 | DeepSeek 今日花费真实 0 与不可计算可区分（incomplete/unknownModels） | ✅ | `src/quota.mjs` 返回完整成本语义，incomplete 下界仅展示、不参与路由；unit 测试 5 例（known/unknown/real-zero/unreadable/decision exclusion） |
+| 1.9 | GUI 胶囊并入本包：/autopilot/api/status + 手写 lazy-CJS client.js | ✅ | `src/panel.mjs` + `client.js`；plugin-shape 测试 'panel: mounts…' + test/client.mjs 3/3 |
+| 1.10 | 保留 Codex OAuth 额度 + Ollama/LM Studio 探测 | ✅ | `src/panel.mjs` pollCodex/pollLocal（沿用独立 panel 已验证逻辑） |
+| 1.11 | 可选 webServer 注入，非 web/测试挂载不失败 | ✅ | `index.mjs` 经 `ctx.inject(['webServer'])` 延迟挂载，避免服务启动竞态；plugin-shape 'panel: absent webServer…' + 隔离 web profile 实测 |
 
 ## 2. 去个人化
 
-独立审计 agent 全仓复核（排除 node_modules/.npm-cache/package-lock.json），结论全部通过：
+| # | 检查项 | 状态 | 证据 |
+|---|---|---|---|
+| 2.1 | 无个人用户名/项目名/绝对路径 | ✅ | `src/panel.mjs` 只用 os.homedir()/127.0.0.1 缺省，不含个人绝对路径；独立 panel 旧代码的 `C:\Users\…` 路径**未**带入本包 |
+| 2.2 | 无真实 API key 形态 | ✅ | 测试夹具仅 `sk-abcdefghijklmnop`（合成假 key） |
+| 2.3 | API key 按名读取，输出前4+后4 | ✅ | `src/paths.mjs` redactKey；unit 测试覆盖 |
+| 2.4 | ~/.dsh 数据只读 | ✅ | parse-logs/paths 无写调用；写操作全部指向插件 dataDir |
+
+## 3. 工程质量（自动测试，已实测全绿）
 
 | # | 检查项 | 状态 | 证据 |
 |---|---|---|---|
-| 2.1 | 无个人用户名/项目名/绝对路径 | ✅ | 全仓 grep 红线词表（词表带外维护，不落盘于本仓库；含用户名/个人项目名/用户目录绝对路径形态，大小写敏感+整词）零命中；路径全部经 DSH_HOME/os.homedir/import.meta.url 解析 |
-| 2.2 | 无真实 API key 形态 | ✅ | `sk-[A-Za-z0-9]{8,}` 仅命中 test/unit.mjs:34 的合成夹具 `sk-abcdefghijklmnop`（连续字母假 key，用于断言 redactKey），无真实 key |
-| 2.3 | API key 按名读取（credentials 服务优先，文件降级），输出前4+后4 | ✅ | `index.mjs` resolveKeys（服务优先+catch 降级）+ `src/paths.mjs` redactKey；unit 测试 'redactKey: all branches' |
-| 2.4 | ~/.dsh 数据全程只读 | ✅ | parse-logs/paths 无任何写调用；写操作全部指向插件 dataDir（审计逐文件确认） |
-| 2.5 | .gitignore 排除 credentials/key/测试产物/依赖产物 | ✅ | `.gitignore`（node_modules、.npm-cache、.credentials.yaml、*.key、secrets、test-profile） |
-| 2.6 | 只建议不动手（无路由改写代码） | ✅ | 全仓 grep saveSelection/agent/request waterfall：源码零命中；advisor 只注册工具 + prompt section |
-
-## 3. 工程质量
-
-| # | 检查项 | 状态 | 证据 |
-|---|---|---|---|
-| 3.1 | 单元测试全绿 | ✅ | `node test/unit.mjs` → 21/21 pass |
-| 3.2 | 插件形态冒烟测试全绿 | ✅ | `node test/plugin-shape.mjs` → 5/5 pass |
-| 3.3 | Kimi 端点防御性解析 + 失效告警 | ✅ | `src/poll.mjs`：parse_error 行 + WARN 不崩溃；unit 测试覆盖 schema 漂移/fetch 失败 |
-| 3.4 | 零第三方运行时依赖（仅 @deepseek-ai/schemastery，npm 可装） | ✅ | package.json dependencies 仅一项；Node ≥22.15 原生 node:sqlite |
-| 3.5 | MIT 许可证 | ✅ | LICENSE |
+| 3.1 | 单元测试 | ✅ | `node test/unit.mjs` → 29/29 pass |
+| 3.2 | 插件形态冒烟测试 | ✅ | `node test/plugin-shape.mjs` → 8/8 pass |
+| 3.3 | client bundle 形态测试 | ✅ | `node test/client.mjs` → 3/3 pass |
+| 3.4 | package 形态测试（版本/导出/files/dsh.client） | ✅ | `node test/package-shape.mjs` → 4/4 pass |
+| 3.5 | 零第三方运行时依赖（仅 @deepseek-ai/schemastery） | ✅ | package.json dependencies 仅一项；Node ≥22.15 原生 node:sqlite |
 
 ## 4. 文档
 
 | # | 检查项 | 状态 | 证据 |
 |---|---|---|---|
-| 4.1 | README 中英双语对等 | ✅ | README.md（英文 1-93，中文 97-182） |
-| 4.2 | 数据源透明 + Kimi 端点未文档化风险声明 | ✅ | README "Data sources" 节 ⚠️ 标注 |
-| 4.3 | 隐私承诺（数据不出本机） | ✅ | README "Privacy" 节 |
-| 4.4 | 安装/卸载步骤与机制一致 | ✅ | 审计比对：README insert 行与 install.mjs 打印片段逐字一致；卸载 4 步与 uninstall.mjs 输出一致；安装顺序警告已补（Auto preset 依赖宿主插件） |
+| 4.1 | README 中英双语对等，GitHub tag 更新到 #v0.2.0 | ✅ | README.md 英文/中文安装段均为 `github:…/dsh-quota-autopilot#v0.2.0` |
+| 4.2 | 文档化数据新鲜度（staleAfterMin/freshness/stale） | ✅ | README 功能节 + 配置表 |
+| 4.3 | 文档化 pnpm 要求 | ✅ | README 环境要求 + 安装段 |
+| 4.4 | 文档化 v0.1.0 与独立 dsh-quota-panel 迁移 | ✅ | README "Upgrading & migration" / "升级与迁移" 两节 |
+| 4.5 | install/uninstall 输出正确 GitHub 命令与迁移步骤 | ✅ | scripts/install.mjs、scripts/uninstall.mjs 输出 `#v0.2.0` 与迁移提示 |
 
-## 5. 全新测试 profile 验收（实测完成，2026-08-19）
+## 5. 隔离 web profile 验收（v0.2.0）
 
-环境：独立 `DSH_HOME=<workspace>/.acceptance/dsh-home`（真实 ~/.dsh 全程未动，仅只读复制 credentials.yaml 供轮询），`dsh --profile web --port 3211/3212`，真实 Kimi/DeepSeek 端点。
+> 环境：独立 `DSH_HOME=.acceptance-v02/dsh-home`、web 端口 3214；宿主读取真实凭据/会话只读，写入独立 acceptance dataDir。v0.1.0 与原独立 panel 已完成过 61 分钟 soak，本轮重点重验改动链路。
 
 | # | 检查项 | 状态 | 证据 |
 |---|---|---|---|
-| 5.1 | 按 README 从零安装成功 | ✅ | profile node_modules 装包 + cordis.patch.yml insert 行后，启动日志 `[autopilot] mounted, dataDir=.../profiles/web/data/dsh-autopilot`（数据目录自定位约定在真实 profile 下验证成立） |
-| 5.2 | 快照入库正常 | ✅ | ledger.db `account_snapshots` 首周期即 7 行（kimi weekly used=37/remaining=63 + deepseek balance 22.29 USD 真实数据）；soak 全程持续增长至 441 行；四类 Kimi 窗口 + 三类 DeepSeek 行齐全（poll.intervalMin=1 加速） |
-| 5.3 | Auto preset 出现且可选 | ✅ | `agentPreset.list` 返回 auto（trust=user、双语 name/description、无 broken）；`session.create {agentPreset:'auto'}` → `ok:true`（session-474efa3f / 修复后复验 session-256b4fad）；standard↔auto 双向 `agentPreset.select` 均 ok |
-| 5.4 | 其他 preset 无感知 | ✅ | standard 会话创建成功（session-933e4c88）；4 个 system preset 组合文件 grep `autopilot|route_consult` 零匹配；advisor 行仅存在于 auto preset；卸载后 roster 恢复 standard/code/minimal/cordis 四项 |
-| 5.5 | 未知模型不参与路由 | ✅ | plugin-shape 测试 'user override is the only way an unknown model enters routing' + 'degraded mode: recommended=null 绝不发明路由'；router-core 护栏单测（不可解析角色按分跳过） |
-| 5.6 | 1 小时 soak | ✅ | 连续运行 **61 分钟**（16:31:35Z→17:32:35Z），account_snapshots 检查点 53→123→193→263→331→441 行（修复重启后续跑至 462 行），web 全程 HTTP 200，3 次瞬时网络故障记 fetch_error 行无崩溃；逐 10 分钟证据存于验收工作区 `soak-log.jsonl`（随验收环境保留，不进仓库） |
-| 5.7 | 卸载无残留 | ✅ | README 四步卸载后四项删除复核全部净除；重启实例：HTTP 200、日志零 autopilot 报错、roster 回落 4 个 system preset、standard 会话创建 ok（验收 agent 与主会话两轮独立复核） |
-
-**验收期发现的唯一缺陷及处置**：advisor.mjs `inject` 漏声明 `tools`（首轮 Auto 挂载报 `cannot get property "tools" without inject`）。根因 = mock ctx 不强制 inject 声明。修复（inject 补 'tools' + 断言更新）后真实实例复验通过。
+| 5.1 | 从零安装 v0.2.0 包并挂载 host/client | ✅ | pnpm 隔离 profile 安装成功；host 日志 `autopilot mounted` + `panel mounted at /autopilot/api/status`；发布后再以 GitHub tag 复验 |
+| 5.2 | 真实快照入库 + freshness 生效 | ✅ | API 实测 Kimi weekly=22/rolling=89、DeepSeek balance=$15.10，三源 `collectedAt/ageMs/stale=false`；写入独立 dataDir |
+| 5.3 | GUI client 无构建加载 | ✅ | `GET /autopilot/api/status` 200 JSON；`/plugins/dsh-quota-autopilot/client.js` 200；`__DSH_BOOT__` 含 `dsh-quota-autopilot` |
+| 5.4 | 无独立 dsh-quota-panel 仍正常 | ✅ | 隔离 profile 仅安装 autopilot；boot 仅含新 client，API 不读取 quota-status.json |
+| 5.5 | Auto preset 可发现 | ✅ | install.mjs 实际复制后 `agentPreset.list` HTTP 200，返回 `auto`（trust=user） |
+| 5.6 | 稳定性 | ✅ | v0.2 四组自动测试 44/44；隔离 web 多轮 1min poll 无崩溃；复用 v0.1.0/独立 panel 既有 61min soak 证据 |
+| 5.7 | 卸载无残留 | ⏳ | 发布 tag 后执行 GitHub 安装→卸载终验 |
 
 ## 6. 发布动作（人工）
 
-- [x] GitHub 公开仓库：`Spencermona/dsh-quota-autopilot`
-- [x] package.json 已补 `repository` / `bugs` / `homepage`
-- [x] Git 仓库、首次提交与 GitHub `main` 推送
-- [x] 无 npm 账号的发布路径：支持 `dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"`
-- [ ] GitHub 仓库 topic：`dsh-plugin`（网页端操作，可选）
-- [ ] `npm publish`（可选；不再阻塞 v0.1.0，未来有 npm 发布账号后补）
+- [ ] GitHub 打 tag `v0.2.0` 并推送（README 安装命令已指向该 tag）
+- [ ] `npm publish`（可选；仍需 npm 账号）
 - [ ] 提交 dsh-market / awesome 清单（可选）
+
+> 说明：§3 自动测试与 §4 文档项为本轮已实测/已完成；§5 真实 profile 验收（5.1–5.7）**未**在本轮执行，请勿视为已验证。

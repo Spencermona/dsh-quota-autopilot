@@ -13,6 +13,8 @@ English · [中文](#dsh-quota-autopilot-中文)
 
 - **Role-based routing advisor.** The router thinks in four roles — `main` / `worker` / `long-context` / `reviewer` — never in hardcoded model names. A built-in knowledge base maps known providers to known models (`deepseek-official`: main = `deepseek-v4-pro`, worker = `deepseek-v4-flash`, reviewer = `deepseek-v4-pro`; `kimi-coding`: long-context = `k3`). At startup the plugin probes each provider's actually-available models and fills roles from the knowledge base. Unknown models never enter routing (an anti-burn guardrail) unless you explicitly map one to a role in config. When a provider isn't configured, `main` falls back to that provider's deployment default model.
 - **Quota awareness.** Polls Kimi `/v1/usages` and DeepSeek `/user/balance` on a configurable interval and feeds the numbers into a five-level state machine: `AGGRESSIVE` / `NORMAL` / `CONSERVE` / `RESERVE` / `EMERGENCY`.
+- **Data freshness.** Every quota value carries per-source freshness (`collectedAt` / `ageMs` / `stale`). A snapshot older than `poll.staleAfterMin` (default 15 min) is marked stale and excluded from state/routing decisions — but still shown, so you can tell "no signal" from "signal says fine". DeepSeek today-cost reports `incomplete` + `unknownModels` instead of silently treating an unknown rate as $0.
+- **GUI quota pill (web profile).** Mounts a read-only pill in the composer dock showing Kimi week/5h, DeepSeek balance, today's cost, Codex (ChatGPT subscription) and local runtimes (Ollama/LM Studio, ∞), with stale markers. It is served from this plugin's own `/autopilot/api/status` route — no external status file.
 - **Auto-calibration.** Silently accumulates account snapshots and per-request attribution data; once it has ≥24 h of span and a net increase of ≥3 quota points, it derives *your own* tokens-per-point rate and keeps sliding-correcting it as new windows arrive. Until calibration completes, anything needing that ratio reports `learning` — it never guesses.
 - **Advisory only.** The plugin never touches actual routing. Advice vs. actual consumption is written to a local shadow log for later comparison.
 
@@ -21,10 +23,10 @@ English · [中文](#dsh-quota-autopilot-中文)
 ### From GitHub (recommended; no npm account required)
 
 ```bash
-dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
 ```
 
-`dsh plugin` forwards package specs to pnpm, so a public GitHub repository can be installed directly. Neither the publisher nor the installer needs an npm account for this route.
+`dsh plugin` forwards package specs to pnpm, so a public GitHub repository can be installed directly. Neither the publisher nor the installer needs an npm account for this route. **pnpm is required** — it is what `dsh plugin` drives under the hood, so make sure pnpm is available on your PATH before installing.
 
 ### From npm (after a registry release exists)
 
@@ -53,7 +55,9 @@ All defaults live in `src/config.mjs`; override any of them via the row's `confi
 | --- | --- | --- |
 | `credentials.kimiKeyName` / `credentials.deepseekKeyName` | **Names** of the keys in `$DSH_HOME/.credentials.yaml` — never key values | `KIMI_CODING_API_KEY` / `DEEPSEEK_API_KEY` |
 | `poll.intervalMin` | Quota polling interval (minutes) | `5` |
+| `poll.staleAfterMin` | Age (minutes) after which a snapshot is stale and excluded from state/routing (still displayed) | `15` |
 | `poll.kimiUsageUrl` / `poll.deepseekBalanceUrl` / `poll.timeoutMs` | Endpoints and request timeout | see defaults |
+| `panel.*` | GUI pill: `codex`/`local` toggles, `dailyCapUsd`, `lowPoints`/`warnPoints`, `warnBalanceUsd`/`lowBalanceUsd` display thresholds | see defaults |
 | `dailyBudgetUsd` | Daily DeepSeek budget used by modifiers and the state machine | `5` |
 | `calibration.minSpanHours` / `minPointDelta` / `driftRelearnPct` | Auto-calibration trigger (≥24 h span, ≥3 points net) and relearn drift threshold | `24` / `3` / `30` |
 | `roles` | Explicit role → `{provider, model, reasoningEffort?}` mapping; the only way an unknown model enters routing | `{}` |
@@ -77,14 +81,44 @@ Public documentation can safely bootstrap model names, context limits, capabilit
 ## Privacy
 
 - Everything stays on your machine. All writes are confined to the plugin data directory (`<profile>/data/dsh-quota-autopilot/` under `$DSH_HOME/profiles/`, or `~/.dsh/plugin-data/dsh-quota-autopilot/` as fallback).
-- The only outbound requests are the two quota endpoints listed above. Nothing else is sent anywhere.
+- Core quota polling only calls the Kimi and DeepSeek endpoints listed above. When the web panel's optional Codex display is enabled (default), the local Codex OAuth token is sent only to `https://chatgpt.com/backend-api/wham/usage`; set `panel.codex: false` to disable it. Optional local-runtime probes only call loopback Ollama/LM Studio endpoints.
 - API keys are read **by name** from the local credentials store (key names are configurable); you never paste a key into any config file. In every log and output a key is shown as first-4 + last-4 characters only (e.g. `sk-a****wxyz`).
 
 ## Requirements
 
 - Node.js ≥ 22.15 (uses the native `node:sqlite` module)
 - dsh (verified with the `web` profile)
+- pnpm (required by the GitHub direct-install route — `dsh plugin` forwards the spec to pnpm)
 - Windows / macOS / Linux
+
+## Upgrading & migration
+
+### From v0.1.0 (this package)
+
+1. Re-install at the new tag:
+   ```bash
+   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+   ```
+2. The Auto preset is unchanged; if you copied `presets/auto/` earlier, re-run
+   `node node_modules/dsh-quota-autopilot/scripts/install.mjs --force` to pick up any changes.
+3. The web GUI pill is now served by this package itself (no extra step) — the
+   client bundle is discovered through the package's `dsh.client` manifest and
+   mounts in the web profile automatically.
+
+### From the standalone `dsh-quota-panel`
+
+v0.2.0 replaces the old standalone GUI package (which read an external
+`quota-status.json`) with a built-in panel served directly from the autopilot
+service. To migrate:
+
+1. Remove the standalone package:
+   ```bash
+   dsh plugin --profile web remove dsh-quota-panel
+   ```
+2. Delete the `quota-panel` insert row from `$DSH_HOME/profiles/web/cordis.patch.yml`
+   (the `id: quota-panel` entry and its `statusPath` config — that file is no longer read).
+3. Restart dsh. The pill now reads `/autopilot/api/status` from
+   `dsh-quota-autopilot`; the `statusPath` config key is obsolete.
 
 ## Uninstall
 
@@ -116,6 +150,8 @@ MIT — see [LICENSE](LICENSE).
 
 - **角色制路由顾问。** 路由只认四个角色——`main` / `worker` / `long-context` / `reviewer`——永不直接引用模型名。内置知识库登记已知 provider 的已知模型（`deepseek-official`：main = `deepseek-v4-pro`，worker = `deepseek-v4-flash`，reviewer = `deepseek-v4-pro`；`kimi-coding`：long-context = `k3`）。插件启动时探测各 provider 实际可用的模型，再按知识库填充角色。知识库不认识的模型一律不参与路由（防烧钱护栏），除非你在配置里显式把它映射到某个角色。provider 未配置时，`main` 回退到该 provider 的部署默认模型。
 - **额度感知。** 按可配置间隔轮询 Kimi `/v1/usages` 与 DeepSeek `/user/balance`，把结果喂进五档状态机：`AGGRESSIVE` / `NORMAL` / `CONSERVE` / `RESERVE` / `EMERGENCY`。
+- **数据新鲜度。** 每个额度值都附带逐来源新鲜度（`collectedAt` / `ageMs` / `stale`）。快照超过 `poll.staleAfterMin`（默认 15 分钟）即标记 stale 并从状态/路由决策中排除——但仍会显示，让你区分「无信号」与「信号正常」。DeepSeek 今日花费返回 `incomplete` + `unknownModels`，而不是把未知费率静默当 0。
+- **GUI 额度胶囊（web profile）。** 在 composer 底部横带挂载只读胶囊，显示 Kimi 周/5h、DeepSeek 余额、今日花费、Codex（ChatGPT 订阅）与本地运行时（Ollama/LM Studio，∞），并带 stale 标记。由本插件自己的 `/autopilot/api/status` 路由提供——不再依赖外部状态文件。
 - **自动标定。** 静默积累账户快照与逐请求归因数据；当采集跨度 ≥24 小时且额度点数净增 ≥3 时，自动产出**你自己账户的** tokens-per-point 折算率，并随新窗口数据滑动修正。标定完成前，凡涉及该折算率的输出一律标注 `learning`（学习中）——绝不瞎猜。
 - **只建议，不动手。** 插件绝不改变实际路由；建议与实际消耗的对照写入本机 shadow 日志，供事后比对。
 
@@ -124,10 +160,10 @@ MIT — see [LICENSE](LICENSE).
 ### 从 GitHub 安装（推荐，无需 npm 账号）
 
 ```bash
-dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
 ```
 
-`dsh plugin` 会把包规格透传给 pnpm，因此可以直接安装公开 GitHub 仓库；这条路径无论发布者还是安装者都不需要 npm 账号。
+`dsh plugin` 会把包规格透传给 pnpm，因此可以直接安装公开 GitHub 仓库；这条路径无论发布者还是安装者都不需要 npm 账号。**需要 pnpm**——`dsh plugin` 底层就是驱动 pnpm，安装前请确认 pnpm 已在 PATH 上。
 
 ### 从 npm 安装（等以后发布到 registry 后）
 
@@ -156,7 +192,9 @@ patch 文件被热监听，保存即生效；重启 dsh 也可以。
 | --- | --- | --- |
 | `credentials.kimiKeyName` / `credentials.deepseekKeyName` | `$DSH_HOME/.credentials.yaml` 里 key 的**名字**——永远不是 key 本身 | `KIMI_CODING_API_KEY` / `DEEPSEEK_API_KEY` |
 | `poll.intervalMin` | 额度轮询间隔（分钟） | `5` |
+| `poll.staleAfterMin` | 快照超过该分钟数即视为过期，并从状态/路由决策中排除（仍会显示） | `15` |
 | `poll.kimiUsageUrl` / `poll.deepseekBalanceUrl` / `poll.timeoutMs` | 查询端点与请求超时 | 见默认值 |
+| `panel.*` | GUI 胶囊：`codex`/`local` 开关、`dailyCapUsd`、`lowPoints`/`warnPoints`、`warnBalanceUsd`/`lowBalanceUsd` 显示阈值 | 见默认值 |
 | `dailyBudgetUsd` | DeepSeek 每日预算，供修饰器与状态机使用 | `5` |
 | `calibration.minSpanHours` / `minPointDelta` / `driftRelearnPct` | 自动标定触发条件（跨度 ≥24h、点数净增 ≥3）与漂移重学阈值 | `24` / `3` / `30` |
 | `roles` | 显式角色映射 `{provider, model, reasoningEffort?}`；未知模型进入路由的唯一途径 | `{}` |
@@ -180,14 +218,42 @@ patch 文件被热监听，保存即生效；重启 dsh 也可以。
 ## 隐私承诺
 
 - 所有数据留在本机。一切写入限定在插件数据目录（`$DSH_HOME/profiles/` 下的 `<profile>/data/dsh-quota-autopilot/`，或回退到 `~/.dsh/plugin-data/dsh-quota-autopilot/`）。
-- 唯一的外发请求就是上面列出的两个额度查询端点，此外不发送任何数据。
+- 核心额度轮询只访问上面的 Kimi 与 DeepSeek 端点。Web 面板的可选 Codex 显示默认开启，此时本机 Codex OAuth token 只会发送到 `https://chatgpt.com/backend-api/wham/usage`；设置 `panel.codex: false` 可关闭。本地运行时探测只访问回环地址上的 Ollama/LM Studio。
 - API key 只从本机凭据存储**按名字**读取（key 名可配置）；任何配置文件里都不需要贴 key。所有日志与输出中，key 只显示前 4 位 + 后 4 位（例如 `sk-a****wxyz`）。
 
 ## 环境要求
 
 - Node.js ≥ 22.15（使用原生 `node:sqlite` 模块）
 - dsh（已用 `web` profile 验证）
+- pnpm（GitHub 直装路线需要——`dsh plugin` 会把规格透传给 pnpm）
 - Windows / macOS / Linux
+
+## 升级与迁移
+
+### 从 v0.1.0（本包）升级
+
+1. 按新 tag 重装：
+   ```bash
+   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+   ```
+2. Auto preset 未变；若早先拷贝过 `presets/auto/`，重新运行
+   `node node_modules/dsh-quota-autopilot/scripts/install.mjs --force` 以同步变更。
+3. web GUI 胶囊现已由本包自身提供（无需额外步骤）——client bundle 通过包的
+   `dsh.client` 清单被发现，在 web profile 中自动挂载。
+
+### 从独立 `dsh-quota-panel` 迁移
+
+v0.2.0 用内建面板取代了旧的独立 GUI 包（旧包读取外部 `quota-status.json`）。
+迁移步骤：
+
+1. 卸载独立包：
+   ```bash
+   dsh plugin --profile web remove dsh-quota-panel
+   ```
+2. 删除 `$DSH_HOME/profiles/web/cordis.patch.yml` 中的 `quota-panel` insert 行
+   （`id: quota-panel` 条目及其 `statusPath` 配置——该文件已不再被读取）。
+3. 重启 dsh。胶囊现在从 `dsh-quota-autopilot` 读取 `/autopilot/api/status`；
+   `statusPath` 配置键已废弃。
 
 ## 卸载
 

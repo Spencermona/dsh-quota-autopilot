@@ -34,6 +34,8 @@ import { resolveRoles } from './src/roles.mjs'
 import { route } from './src/router-core.mjs'
 import { evalState } from './src/state.mjs'
 import { appendShadow } from './src/shadow.mjs'
+import { quotaSnapshot, deepseekTodayUsd, stripStale } from './src/quota.mjs'
+import { mountPanel } from './src/panel.mjs'
 
 export const name = 'autopilot'
 // Everything is optional: the plugin degrades gracefully without llm /
@@ -54,8 +56,10 @@ export const Config = z.object({
     kimiUsageUrl: z.string().default(DEFAULT_CONFIG.poll.kimiUsageUrl),
     deepseekBalanceUrl: z.string().default(DEFAULT_CONFIG.poll.deepseekBalanceUrl),
     timeoutMs: z.number().default(DEFAULT_CONFIG.poll.timeoutMs),
+    staleAfterMin: z.number().min(1).default(DEFAULT_CONFIG.poll.staleAfterMin),
   }).default({}),
   dailyBudgetUsd: z.number().default(DEFAULT_CONFIG.dailyBudgetUsd),
+  panel: z.object({}).default({}),
   calibration: z.object({
     minSpanHours: z.number().default(DEFAULT_CONFIG.calibration.minSpanHours),
     minPointDelta: z.number().default(DEFAULT_CONFIG.calibration.minPointDelta),
@@ -78,6 +82,8 @@ const SettingsSchema = z.object({
   poll: z.object({
     intervalMin: z.number().min(1).default(DEFAULT_CONFIG.poll.intervalMin)
       .description('Quota poll interval in minutes'),
+    staleAfterMin: z.number().min(1).default(DEFAULT_CONFIG.poll.staleAfterMin)
+      .description('Age in minutes after which a quota snapshot is considered stale'),
   }).default({}),
   roles: z.object({}).default({})
     .description('Explicit role -> {provider, model, reasoningEffort?} mapping (user override)'),
@@ -96,6 +102,10 @@ function validateConfig(cfg, notes) {
   if (!(typeof cfg.poll?.intervalMin === 'number' && Number.isFinite(cfg.poll.intervalMin) && cfg.poll.intervalMin >= 1)) {
     notes.push(`config poll.intervalMin invalid (${String(cfg.poll?.intervalMin)}): reset to default ${DEFAULT_CONFIG.poll.intervalMin}`)
     cfg.poll.intervalMin = DEFAULT_CONFIG.poll.intervalMin
+  }
+  if (!(typeof cfg.poll?.staleAfterMin === 'number' && Number.isFinite(cfg.poll.staleAfterMin) && cfg.poll.staleAfterMin >= 1)) {
+    notes.push(`config poll.staleAfterMin invalid (${String(cfg.poll?.staleAfterMin)}): reset to default ${DEFAULT_CONFIG.poll.staleAfterMin}`)
+    cfg.poll.staleAfterMin = DEFAULT_CONFIG.poll.staleAfterMin
   }
   if (cfg.roles !== undefined && (typeof cfg.roles !== 'object' || cfg.roles === null || Array.isArray(cfg.roles))) {
     notes.push('config roles invalid (not an object): reset to default {}')
@@ -137,57 +147,8 @@ function resolveDataDir(cfg, dshHome) {
 // --- quota snapshot -----------------------------------------------------------
 // pollAll() persists snapshots into the ledger; the latest snapshot rows ARE
 // the most recent poll values (and survive restarts, unlike process memory).
-
-function latestSnapshot(db, provider, windowType) {
-  return db.prepare(`SELECT "limit", used, remaining, reset_time, unit FROM account_snapshots
-    WHERE provider=? AND window_type=? ORDER BY collected_at DESC LIMIT 1`).get(provider, windowType)
-}
-
-function quotaSnapshot(db) {
-  const q = {}
-  try {
-    const w = latestSnapshot(db, 'kimi-coding', 'weekly')
-    if (w) {
-      q.kimiWeeklyRemaining = w.remaining ?? null
-      q.kimiWeeklyLimit = w.limit ?? null
-      q.kimiWeeklyResetTime = w.reset_time ?? null
-    }
-    const r5 = latestSnapshot(db, 'kimi-coding', 'rolling_5h')
-    if (r5) q.kimiRolling5hRemaining = r5.remaining ?? null
-    const bal = latestSnapshot(db, 'deepseek-official', 'balance')
-    if (bal) q.deepseekBalanceUsd = bal.remaining ?? null
-  } catch { /* ledger unreadable -> partial snapshot, never crash */ }
-  return q
-}
-
-// DeepSeek cost of the local-timezone current day, computed from attributed
-// usage events x the peak/off-peak rates table (ported from the validated
-// personal route script). reasoning_tokens is already included in
-// output_tokens and must NOT be added on top.
-function deepseekTodayUsd(db) {
-  try {
-    const rates = {}
-    for (const r of db.prepare(`SELECT model, bucket, usd_per_mtoken FROM rates WHERE provider='deepseek-official'`).all()) {
-      rates[r.model + '|' + r.bucket] = r.usd_per_mtoken
-    }
-    const midnight = new Date(); midnight.setHours(0, 0, 0, 0)
-    let total = 0
-    const rows = db.prepare(`SELECT ts, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
-      FROM usage_events WHERE provider='deepseek-official' AND ts>=?`).all(midnight.getTime())
-    for (const e of rows) {
-      const h = new Date(Number(e.ts)).getUTCHours()
-      const pp = (h >= 1 && h < 4) || (h >= 6 && h < 10) ? 'peak' : 'offpeak'
-      const r = (b) => rates[e.model + '|' + b + '_' + pp] ?? 0
-      total += e.input_tokens * r('input') / 1e6
-             + e.cache_read_tokens * r('cache_read') / 1e6
-             + e.cache_write_tokens * r('cache_write') / 1e6
-             + e.output_tokens * r('output') / 1e6
-    }
-    return Number(total.toFixed(4))
-  } catch {
-    return null
-  }
-}
+// Reading (quotaSnapshot / deepseekTodayUsd / stripStale) lives in src/quota.mjs
+// so the freshness and daily-cost logic is unit-testable in isolation.
 
 function redactedKeyHints(dshHome, cfg) {
   const keys = readCredentials(dshHome, cfg.credentials)
@@ -299,9 +260,22 @@ export async function apply(ctx, config) {
   }
 
   function snapshotWithCost() {
-    const quota = quotaSnapshot(db)
-    quota.deepseekTodayUsd = deepseekTodayUsd(db)
+    const quota = quotaSnapshot(db, cfg)
+    const cost = deepseekTodayUsd(db)
+    quota.deepseekTodayUsd = cost.todayUsd
+    quota.deepseekToday = cost
     return quota
+  }
+
+  // Human-readable note when today's DeepSeek cost is unavailable/lower-bound.
+  function incompleteNote(quota) {
+    const t = quota.deepseekToday
+    if (!t || !t.incomplete) return null
+    if (t.todayUsd === null) return 'deepseek today cost unavailable: ledger could not be read'
+    const models = (Array.isArray(t.unknownModels) && t.unknownModels.length)
+      ? t.unknownModels.join(', ')
+      : 'unattributed events'
+    return `deepseek today cost incomplete: no known rate for ${models} — todayUsd is a lower bound and excluded from routing`
   }
 
   async function advise(args = {}) {
@@ -311,12 +285,16 @@ export async function apply(ctx, config) {
     const estTokens = Number(input.estTokens) || Math.max(1000, Math.round(text.length / 3) + 20000)
 
     const quota = snapshotWithCost()
-    const quotaState = evalState(quota, cfg)
+    // Stale polled fields must not drive the verdict or the route.
+    const { quota: freshQuota, staleNotes } = stripStale(quota)
+    const quotaState = evalState(freshQuota, cfg)
     const rolesResult = await getRoles()
-    const result = route({ type, estTokens, text }, quota, cfg, rolesResult.roles)
+    const result = route({ type, estTokens, text }, freshQuota, cfg, rolesResult.roles)
 
     const learning = calibrationState?.status !== 'calibrated'
-    const notes = [...(result.notes ?? []), ...rolesResult.notes]
+    const notes = [...(result.notes ?? []), ...rolesResult.notes, ...staleNotes]
+    const incNote = incompleteNote(quota)
+    if (incNote) notes.push(incNote)
     if (learning) notes.push('learning: true — point/token ratio still calibrating')
 
     const out = {
@@ -361,10 +339,14 @@ export async function apply(ctx, config) {
     status() {
       if (!rolesCache.value) getRoles().catch(() => {}) // warm the cache in the background
       const quota = snapshotWithCost()
+      const { quota: freshQuota, staleNotes } = stripStale(quota)
+      const notes = [...bootNotes, ...staleNotes]
+      const incNote = incompleteNote(quota)
+      if (incNote) notes.push(incNote)
       return {
         ok: true,
         quota,
-        state: evalState(quota, cfg),
+        state: evalState(freshQuota, cfg),
         roles: rolesCache.value
           ? { roles: rolesCache.value.roles, sources: rolesCache.value.sources }
           : null,
@@ -372,7 +354,7 @@ export async function apply(ctx, config) {
         poll: lastPoll ? { kimi: lastPoll.kimi, deepseek: lastPoll.deepseek } : null,
         keyHints: lastPoll?.keyHints ?? redactedKeyHints(dshHome, cfg),
         dataDir,
-        notes: [...bootNotes],
+        notes,
       }
     },
     advise,
@@ -381,6 +363,22 @@ export async function apply(ctx, config) {
     dataDir,
   }
   ctx.provide('autopilot', service)
+
+  // Optional GUI panel: wait for webServer when this is a web profile. Calling
+  // ctx.get() only at initial apply time races the later webServer mount, so use
+  // optional injection: non-web profiles simply never run the callback.
+  try {
+    ctx.inject(['webServer'], (wctx) => {
+      try {
+        const panelMounted = mountPanel(wctx, service, cfg)
+        if (panelMounted) console.log(`[autopilot] panel mounted at /autopilot/api/status`)
+      } catch (e) {
+        console.warn(`WARN autopilot panel skipped: ${e.message}`)
+      }
+    })
+  } catch (e) {
+    console.warn(`WARN autopilot panel injection skipped: ${e.message}`)
+  }
 
   // Optional settings namespace via the cordis optional-injection pattern.
   // If the settings service is absent, the row config alone remains the
