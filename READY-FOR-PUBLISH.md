@@ -67,9 +67,10 @@
 
 ## 6. 发布动作（人工）
 
-- [ ] **确定 GitHub 发布账号**（用户决策项；repo 必须公开，git 历史从第一条 commit 留痕）
-- [ ] package.json 补 `repository` / `bugs` / `homepage` 字段（账号定下后）
-- [ ] `git init` + 首次 commit（确认无红线内容后）
-- [ ] 推 GitHub，repo 打 topic：`dsh-plugin`
-- [ ] `npm publish`（确认 npm 账号）
-- [ ] 可选：提交 dsh-market / awesome 清单
+- [x] GitHub 公开仓库：`Spencermona/dsh-quota-autopilot`
+- [x] package.json 已补 `repository` / `bugs` / `homepage`
+- [x] Git 仓库、首次提交与 GitHub `main` 推送
+- [x] 无 npm 账号的发布路径：支持 `dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"`
+- [ ] GitHub 仓库 topic：`dsh-plugin`（网页端操作，可选）
+- [ ] `npm publish`（可选；不再阻塞 v0.1.0，未来有 npm 发布账号后补）
+- [ ] 提交 dsh-market / awesome 清单（可选）

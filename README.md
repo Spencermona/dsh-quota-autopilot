@@ -18,6 +18,16 @@ English · [中文](#dsh-quota-autopilot-中文)
 
 ## Install
 
+### From GitHub (recommended; no npm account required)
+
+```bash
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"
+```
+
+`dsh plugin` forwards package specs to pnpm, so a public GitHub repository can be installed directly. Neither the publisher nor the installer needs an npm account for this route.
+
+### From npm (after a registry release exists)
+
 ```bash
 dsh plugin --profile web add dsh-quota-autopilot
 ```
@@ -59,6 +69,10 @@ The plugin also registers a settings namespace `autopilot`, so `settings.yaml` c
 - **Kimi quota** — `GET https://api.kimi.com/coding/v1/usages` (plural). ⚠️ **This endpoint is undocumented and may change at any time.** The plugin parses it defensively (string numbers coerced, NaN tolerated) and, on schema drift, records a `parse_error` and warns instead of crashing.
 - **DeepSeek balance** — `GET https://api.deepseek.com/user/balance` (officially documented). It only reports a monetary balance; there is no token dimension.
 - **dsh's own durable logs** — `~/.dsh/sessions/**/session.jsonl.zstd`. These are the only precise source of real per-request token usage, and the plugin reads them **strictly read-only**.
+
+### What public online data can and cannot replace
+
+Public documentation can safely bootstrap model names, context limits, capabilities, and published API prices. It **cannot** truthfully replace your account's remaining quota, reset window, balance, actual token usage, or personal tokens-per-point ratio. When account data is unavailable, the plugin keeps those fields unavailable/`learning` rather than fabricating a value; routing then falls back to resolved roles and non-quota rules. This conservative degradation is intentional.
 
 ## Privacy
 
@@ -107,6 +121,16 @@ MIT — see [LICENSE](LICENSE).
 
 ## 安装
 
+### 从 GitHub 安装（推荐，无需 npm 账号）
+
+```bash
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.1.0"
+```
+
+`dsh plugin` 会把包规格透传给 pnpm，因此可以直接安装公开 GitHub 仓库；这条路径无论发布者还是安装者都不需要 npm 账号。
+
+### 从 npm 安装（等以后发布到 registry 后）
+
 ```bash
 dsh plugin --profile web add dsh-quota-autopilot
 ```
@@ -148,6 +172,10 @@ patch 文件被热监听，保存即生效；重启 dsh 也可以。
 - **Kimi 额度** —— `GET https://api.kimi.com/coding/v1/usages`（复数）。⚠️ **该端点未文档化，随时可能变更。** 插件做防御性解析（字符串数字强转、NaN 容忍），schema 漂移时记录 `parse_error` 并告警，不崩溃。
 - **DeepSeek 余额** —— `GET https://api.deepseek.com/user/balance`（官方文档化端点）。只有货币余额，没有 token 维度。
 - **dsh 自身 durable 日志** —— `~/.dsh/sessions/**/session.jsonl.zstd`。这是逐请求真实 token 用量的唯一精确来源，插件对其**严格只读**。
+
+### 网上公开数据能替代什么
+
+公开文档可以安全地用来初始化模型名称、上下文长度、能力标签和公开 API 价格；但它**不能**真实替代你的账户剩余额度、刷新窗口、余额、实际 token 用量或个人 tokens-per-point 折算率。账户数据不可用时，插件会保持对应字段不可用或 `learning`，而不是编造数值；路由则退化为已解析角色与非额度规则。这是有意设计的保守降级。
 
 ## 隐私承诺
 
