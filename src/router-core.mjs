@@ -23,6 +23,10 @@ function matchWhen(when, task, quota, cfg) {
     if (h > when.kimiWeeklyResetWithinH) return false
   }
   if (when.deepseekTodayUsdGt !== undefined && !((quota.deepseekTodayUsd ?? 0) > when.deepseekTodayUsdGt)) return false
+  if (when.deepseekTodayUsdGtPct !== undefined) {
+    const threshold = cfg.dailyBudgetUsd * when.deepseekTodayUsdGtPct / 100
+    if (!((quota.deepseekTodayUsd ?? 0) > threshold)) return false
+  }
   return true
 }
 

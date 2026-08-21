@@ -16,14 +16,14 @@ English · [中文](#dsh-quota-autopilot-中文)
 - **Data freshness.** Every quota value carries per-source freshness (`collectedAt` / `ageMs` / `stale`). A snapshot older than `poll.staleAfterMin` (default 15 min) is marked stale and excluded from state/routing decisions — but still shown, so you can tell "no signal" from "signal says fine". DeepSeek today-cost reports `incomplete` + `unknownModels` instead of silently treating an unknown rate as $0.
 - **GUI quota pill (web profile).** Mounts a read-only pill in the composer dock showing Kimi week/5h, DeepSeek balance, today's cost, Codex (ChatGPT subscription) and local runtimes (Ollama/LM Studio, ∞), with stale markers. It is served from this plugin's own `/autopilot/api/status` route — no external status file.
 - **Auto-calibration.** Silently accumulates account snapshots and per-request attribution data; once it has ≥24 h of span and a net increase of ≥3 quota points, it derives *your own* tokens-per-point rate and keeps sliding-correcting it as new windows arrive. Until calibration completes, anything needing that ratio reports `learning` — it never guesses.
-- **Advisory only.** The plugin never touches actual routing. Advice vs. actual consumption is written to a local shadow log for later comparison.
+- **Fail-closed optional automation (v0.3).** Default `automation.mode: off` preserves advisory-only behavior. `shadow` records safety reroutes without applying them; `enforce` may switch only to already-resolved, non-reserve destinations when a fresh Kimi window crosses `RESERVE`/`EMERGENCY` thresholds or a complete DeepSeek cost exceeds `dailyBudgetUsd`. Create the configured kill-switch file to disable enforcement immediately without restarting.
 
 ## Install
 
 ### From GitHub (recommended; no npm account required)
 
 ```bash
-dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.3.0"
 ```
 
 `dsh plugin` forwards package specs to pnpm, so a public GitHub repository can be installed directly. Neither the publisher nor the installer needs an npm account for this route. **pnpm is required** — it is what `dsh plugin` drives under the hood, so make sure pnpm is available on your PATH before installing.
@@ -57,8 +57,10 @@ All defaults live in `src/config.mjs`; override any of them via the row's `confi
 | `poll.intervalMin` | Quota polling interval (minutes) | `5` |
 | `poll.staleAfterMin` | Age (minutes) after which a snapshot is stale and excluded from state/routing (still displayed) | `15` |
 | `poll.kimiUsageUrl` / `poll.deepseekBalanceUrl` / `poll.timeoutMs` | Endpoints and request timeout | see defaults |
-| `panel.*` | GUI pill: `codex`/`local` toggles, `dailyCapUsd`, `lowPoints`/`warnPoints`, `warnBalanceUsd`/`lowBalanceUsd` display thresholds | see defaults |
-| `dailyBudgetUsd` | Daily DeepSeek budget used by modifiers and the state machine | `5` |
+| `panel.*` | GUI pill toggles and display thresholds. Deprecated `panel.dailyCapUsd` is only a compatibility alias; unset means follow `dailyBudgetUsd` | see defaults |
+| `dailyBudgetUsd` | The single DeepSeek daily budget used by GUI, modifiers, state machine, and automation | `5` |
+| `automation.mode` | `off` (no listener), `shadow` (log only), or `enforce` (apply safety reroutes) | `off` |
+| `automation.killSwitchFile` / `automation.logFile` | Live rollback switch and JSONL decision log; relative paths resolve under `dataDir` | `automation-kill-switch` / `automation-log.jsonl` |
 | `calibration.minSpanHours` / `minPointDelta` / `driftRelearnPct` | Auto-calibration trigger (≥24 h span, ≥3 points net) and relearn drift threshold | `24` / `3` / `30` |
 | `roles` | Explicit role → `{provider, model, reasoningEffort?}` mapping; the only way an unknown model enters routing | `{}` |
 | `rules` / `fallback` / `modifiers` / `stateMachine` / `stateActions` | Routing rules, score modifiers, and quota state thresholds — all reference **role names**, never model names | see `src/config.mjs` |
@@ -93,11 +95,15 @@ Public documentation can safely bootstrap model names, context limits, capabilit
 
 ## Upgrading & migration
 
+### From v0.2.0
+
+Upgrade to the v0.3.0 tag. Automation remains **off**, so the upgrade does not change routing. To stage it safely, set `automation.mode: shadow`, inspect `automation-log.jsonl`, then opt into `enforce`. Touch `<dataDir>/automation-kill-switch` for immediate rollback; delete it to restore the configured mode. Disable any legacy `quota-mgr` `agent/request` hook before enabling `enforce`, so two routers cannot compete.
+
 ### From v0.1.0 (this package)
 
 1. Re-install at the new tag:
    ```bash
-   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.3.0"
    ```
 2. The Auto preset is unchanged; if you copied `presets/auto/` earlier, re-run
    `node node_modules/dsh-quota-autopilot/scripts/install.mjs --force` to pick up any changes.
@@ -153,14 +159,14 @@ MIT — see [LICENSE](LICENSE).
 - **数据新鲜度。** 每个额度值都附带逐来源新鲜度（`collectedAt` / `ageMs` / `stale`）。快照超过 `poll.staleAfterMin`（默认 15 分钟）即标记 stale 并从状态/路由决策中排除——但仍会显示，让你区分「无信号」与「信号正常」。DeepSeek 今日花费返回 `incomplete` + `unknownModels`，而不是把未知费率静默当 0。
 - **GUI 额度胶囊（web profile）。** 在 composer 底部横带挂载只读胶囊，显示 Kimi 周/5h、DeepSeek 余额、今日花费、Codex（ChatGPT 订阅）与本地运行时（Ollama/LM Studio，∞），并带 stale 标记。由本插件自己的 `/autopilot/api/status` 路由提供——不再依赖外部状态文件。
 - **自动标定。** 静默积累账户快照与逐请求归因数据；当采集跨度 ≥24 小时且额度点数净增 ≥3 时，自动产出**你自己账户的** tokens-per-point 折算率，并随新窗口数据滑动修正。标定完成前，凡涉及该折算率的输出一律标注 `learning`（学习中）——绝不瞎猜。
-- **只建议，不动手。** 插件绝不改变实际路由；建议与实际消耗的对照写入本机 shadow 日志，供事后比对。
+- **默认关闭、失效即安全的可选自动路由（v0.3）。** 默认 `automation.mode: off`，保持只建议不动手；`shadow` 只记录安全切换候选；`enforce` 仅在新鲜的 Kimi 窗口越过 `RESERVE`/`EMERGENCY` 阈值，或完整可信的 DeepSeek 今日成本超过 `dailyBudgetUsd` 时，切到已解析且未进入保留区的目标角色。创建 kill-switch 文件即可无需重启立即停用。
 
 ## 安装
 
 ### 从 GitHub 安装（推荐，无需 npm 账号）
 
 ```bash
-dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.3.0"
 ```
 
 `dsh plugin` 会把包规格透传给 pnpm，因此可以直接安装公开 GitHub 仓库；这条路径无论发布者还是安装者都不需要 npm 账号。**需要 pnpm**——`dsh plugin` 底层就是驱动 pnpm，安装前请确认 pnpm 已在 PATH 上。
@@ -194,8 +200,10 @@ patch 文件被热监听，保存即生效；重启 dsh 也可以。
 | `poll.intervalMin` | 额度轮询间隔（分钟） | `5` |
 | `poll.staleAfterMin` | 快照超过该分钟数即视为过期，并从状态/路由决策中排除（仍会显示） | `15` |
 | `poll.kimiUsageUrl` / `poll.deepseekBalanceUrl` / `poll.timeoutMs` | 查询端点与请求超时 | 见默认值 |
-| `panel.*` | GUI 胶囊：`codex`/`local` 开关、`dailyCapUsd`、`lowPoints`/`warnPoints`、`warnBalanceUsd`/`lowBalanceUsd` 显示阈值 | 见默认值 |
-| `dailyBudgetUsd` | DeepSeek 每日预算，供修饰器与状态机使用 | `5` |
+| `panel.*` | GUI 胶囊开关与显示阈值；`panel.dailyCapUsd` 仅为兼容别名，未设置时跟随 `dailyBudgetUsd` | 见默认值 |
+| `dailyBudgetUsd` | GUI、修饰器、状态机和自动路由共同使用的唯一 DeepSeek 每日预算 | `5` |
+| `automation.mode` | `off`（不注册）、`shadow`（只记日志）、`enforce`（执行安全切换） | `off` |
+| `automation.killSwitchFile` / `automation.logFile` | 即时回滚开关与 JSONL 决策日志；相对路径按 `dataDir` 解析 | `automation-kill-switch` / `automation-log.jsonl` |
 | `calibration.minSpanHours` / `minPointDelta` / `driftRelearnPct` | 自动标定触发条件（跨度 ≥24h、点数净增 ≥3）与漂移重学阈值 | `24` / `3` / `30` |
 | `roles` | 显式角色映射 `{provider, model, reasoningEffort?}`；未知模型进入路由的唯一途径 | `{}` |
 | `rules` / `fallback` / `modifiers` / `stateMachine` / `stateActions` | 路由规则、加减分修饰器、额度状态机阈值——全部引用**角色名**，永不引用模型名 | 见 `src/config.mjs` |
@@ -230,11 +238,15 @@ patch 文件被热监听，保存即生效；重启 dsh 也可以。
 
 ## 升级与迁移
 
+### 从 v0.2.0 升级
+
+升级到 v0.3.0 tag 后自动路由仍保持 **off**，不会改变现有路由。建议先设 `automation.mode: shadow` 观察 `automation-log.jsonl`，确认后再改为 `enforce`。创建 `<dataDir>/automation-kill-switch` 可即时回滚；删除该文件即可恢复配置模式。启用 `enforce` 前必须停用旧 `quota-mgr` 的 `agent/request` hook，避免两个路由器竞争。
+
 ### 从 v0.1.0（本包）升级
 
 1. 按新 tag 重装：
    ```bash
-   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+   dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.3.0"
    ```
 2. Auto preset 未变；若早先拷贝过 `presets/auto/`，重新运行
    `node node_modules/dsh-quota-autopilot/scripts/install.mjs --force` 以同步变更。

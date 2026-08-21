@@ -125,7 +125,7 @@ export function mountPanel(ctx, autopilot, cfg = {}) {
   // Display thresholds, forwarded to the client so coloring matches the panel.
   // staleMs tracks poll.staleAfterMin unless overridden.
   const panel = {
-    dailyCapUsd: p.dailyCapUsd ?? 2.0,
+    dailyCapUsd: p.dailyCapUsd ?? cfg.dailyBudgetUsd,
     lowPoints: p.lowPoints ?? 10,
     warnPoints: p.warnPoints ?? 25,
     warnBalanceUsd: p.warnBalanceUsd ?? 5,
@@ -178,6 +178,11 @@ export function mountPanel(ctx, autopilot, cfg = {}) {
       codex: extras.codex,
       local: extras.local,
       updatedAt: freshestCollectedAt(f),
+      automation: st.automation ? {
+        mode: st.automation.mode,
+        effectiveMode: st.automation.effectiveMode,
+        killed: st.automation.killed,
+      } : null,
       notes: st.notes ?? [],
     }
   }

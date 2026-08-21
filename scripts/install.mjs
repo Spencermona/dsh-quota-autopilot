@@ -62,7 +62,7 @@ Manual steps remaining:
 
 1. Install the host plugin into your profile (example profile: web; requires pnpm):
 
-     dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.2.0"
+     dsh plugin --profile web add "github:Spencermona/dsh-quota-autopilot#v0.3.0"
 
 2. Add the plugin row to ${path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml')}
    (root-level insert; create the file if missing):
@@ -75,7 +75,7 @@ Manual steps remaining:
    service starts polling quotas into its data directory, and the web composer
    dock shows the quota pill (served by this package at /autopilot/api/status).
 
-Upgrading from v0.1.0: re-run step 1 with the v0.2.0 tag above, then step 3.
+Upgrading from v0.1.0/v0.2.0: re-run step 1 with the v0.3.0 tag above, then step 3. Automation remains off until explicitly enabled.
 
 Migrating from the standalone dsh-quota-panel: run
    dsh plugin --profile web remove dsh-quota-panel

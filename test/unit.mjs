@@ -18,6 +18,8 @@ import { appendShadow, readShadow } from '../src/shadow.mjs'
 import { pollAll } from '../src/poll.mjs'
 import { mergeConfig, DEFAULT_CONFIG } from '../src/config.mjs'
 import { quotaSnapshot, deepseekTodayUsd, stripStale } from '../src/quota.mjs'
+import { normalizeAutomationMode, decideAutomation, applyAutomationTarget } from '../src/automation.mjs'
+import { route } from '../src/router-core.mjs'
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-autopilot-test-'))
@@ -533,4 +535,54 @@ test('quota: deepseekTodayUsd unreadable ledger -> todayUsd null, incomplete tru
   assert.equal(r.todayUsd, null)
   assert.equal(r.incomplete, true)
   assert.deepEqual(r.unknownModels, [])
+})
+
+// ---------- automation.mjs ----------
+
+const AUTO_ROLES = {
+  main: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' },
+  worker: { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'low' },
+  'long-context': { provider: 'kimi-coding', model: 'k3', reasoningEffort: null },
+}
+const AUTO_CFG = mergeConfig({ dailyBudgetUsd: 5 })
+
+test('router: over-budget modifier follows dailyBudgetUsd instead of a literal dollar value', () => {
+  const cfg = mergeConfig({ dailyBudgetUsd: 10 })
+  const below = route({ type: 'coding', estTokens: 1000 }, { deepseekTodayUsd: 6 }, cfg, AUTO_ROLES)
+  assert.equal(below.recommended.role, 'main')
+  const above = route({ type: 'coding', estTokens: 1000 }, { deepseekTodayUsd: 10.01 }, cfg, AUTO_ROLES)
+  assert.equal(above.recommended.role, 'worker')
+})
+
+test('automation: mode normalization is fail-closed', () => {
+  assert.equal(normalizeAutomationMode('off'), 'off')
+  assert.equal(normalizeAutomationMode('shadow'), 'shadow')
+  assert.equal(normalizeAutomationMode('enforce'), 'enforce')
+  assert.equal(normalizeAutomationMode('surprise'), 'off')
+})
+
+test('automation: quota emergency moves Kimi only to resolved worker role', () => {
+  const lowKimi = { kimiWeeklyRemaining: 9, kimiRolling5hRemaining: 50, deepseekBalanceUsd: 10 }
+  const d = decideAutomation({ provider: 'kimi-coding', model: 'k3' }, AUTO_ROLES, lowKimi, 'RESERVE', AUTO_CFG)
+  assert.equal(d.target.model, 'deepseek-v4-flash')
+  assert.equal(d.reason, 'kimi-reserve')
+  assert.equal(decideAutomation({ provider: 'kimi-coding', model: 'k3' }, { ...AUTO_ROLES, worker: null }, lowKimi, 'RESERVE', AUTO_CFG), null)
+  assert.equal(decideAutomation({ provider: 'kimi-coding', model: 'k3' }, { ...AUTO_ROLES, worker: { provider: 'acme', model: 'unknown-health' } }, lowKimi, 'RESERVE', AUTO_CFG), null)
+  // Aggregate RESERVE caused only by low DeepSeek balance must keep Kimi.
+  assert.equal(decideAutomation({ provider: 'kimi-coding', model: 'k3' }, AUTO_ROLES, { kimiWeeklyRemaining: 50, kimiRolling5hRemaining: 50, deepseekBalanceUsd: 0.8 }, 'RESERVE', AUTO_CFG), null)
+  assert.equal(decideAutomation({ provider: 'kimi-coding', model: 'k3' }, AUTO_ROLES, { ...lowKimi, deepseekBalanceUsd: 0.4 }, 'EMERGENCY', AUTO_CFG), null)
+})
+
+test('automation: complete over-budget cost moves DeepSeek to resolved Kimi role', () => {
+  const healthyKimi = { deepseekTodayUsd: 5.01, kimiWeeklyRemaining: 50, kimiRolling5hRemaining: 50 }
+  const d = decideAutomation({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }, AUTO_ROLES, healthyKimi, 'NORMAL', AUTO_CFG)
+  assert.equal(d.target.model, 'k3')
+  assert.equal(d.reason, 'deepseek-daily-budget')
+  assert.equal(decideAutomation({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }, AUTO_ROLES, { ...healthyKimi, deepseekTodayUsd: null }, 'NORMAL', AUTO_CFG), null)
+  assert.equal(decideAutomation({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }, AUTO_ROLES, { ...healthyKimi, kimiWeeklyRemaining: 2 }, 'EMERGENCY', AUTO_CFG), null)
+})
+
+test('automation: applying a target clears inherited effort when target has none', () => {
+  const out = applyAutomationTarget({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max', maxTokens: 123 }, AUTO_ROLES['long-context'])
+  assert.deepEqual(out, { provider: 'kimi-coding', model: 'k3', maxTokens: 123 })
 })

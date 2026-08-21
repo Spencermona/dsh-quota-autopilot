@@ -26,6 +26,15 @@ export const DEFAULT_CONFIG = {
   // --- budget ---
   dailyBudgetUsd: 5,
 
+  // --- optional request-time routing (v0.3; safe default is fully off) ---
+  automation: {
+    mode: 'off', // off | shadow | enforce
+    // Relative paths resolve inside dataDir. Creating the kill-switch file
+    // disables enforcement immediately, without a process restart.
+    killSwitchFile: 'automation-kill-switch',
+    logFile: 'automation-log.jsonl',
+  },
+
   // --- calibration ---
   // tok/pt ratio is LEARNED, never guessed: null until auto-calibration completes
   // (>=24h of snapshots AND >=3 points net increase). Before that, anything that
@@ -43,7 +52,8 @@ export const DEFAULT_CONFIG = {
   panel: {
     codex: true,
     local: true,
-    dailyCapUsd: 2.0,
+    // Deprecated compatibility alias. null means follow dailyBudgetUsd.
+    dailyCapUsd: null,
     lowPoints: 10,
     warnPoints: 25,
     warnBalanceUsd: 5,
@@ -66,7 +76,7 @@ export const DEFAULT_CONFIG = {
   fallback: { role: 'main', score: 50, why: 'default primary role' },
   modifiers: [
     { id: 'kimi-subscription-bonus', when: { kimiWeeklyRemainingPctGt: 50, kimiWeeklyResetWithinH: 48 }, role: 'long-context', addScore: 40, why: 'Kimi weekly quota >50% and resets within 48h: prefer spending subscription quota' },
-    { id: 'deepseek-over-budget', when: { deepseekTodayUsdGt: 5 }, roles: ['main', 'reviewer'], addScore: -60, why: 'DeepSeek daily spend over budget: downgrade non-critical tasks', downgradeTo: 'worker' },
+    { id: 'deepseek-over-budget', when: { deepseekTodayUsdGtPct: 100 }, roles: ['main', 'reviewer'], addScore: -60, why: 'DeepSeek daily spend over budget: downgrade non-critical tasks', downgradeTo: 'worker' },
   ],
 
   // --- quota state machine ---

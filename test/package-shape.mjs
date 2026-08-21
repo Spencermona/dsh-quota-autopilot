@@ -1,5 +1,5 @@
 // Package-shape test: asserts the published manifest (package.json) and the
-// files it references are consistent for v0.2.0 — version, exports (./client),
+// files it references are consistent for v0.3.0 — version, exports (./client),
 // files list, the dsh.client inject/platform block, and the lockfile version.
 // Run directly:
 //   node test/package-shape.mjs
@@ -12,12 +12,12 @@ import { fileURLToPath } from 'node:url'
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-test('package: version 0.2.0 and lockfile in sync', () => {
+test('package: version 0.3.0 and lockfile in sync', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'))
   const lock = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package-lock.json'), 'utf8'))
-  assert.equal(pkg.version, '0.2.0')
-  assert.equal(lock.version, '0.2.0')
-  assert.equal(lock.packages[''].version, '0.2.0')
+  assert.equal(pkg.version, '0.3.0')
+  assert.equal(lock.version, '0.3.0')
+  assert.equal(lock.packages[''].version, '0.3.0')
   assert.equal(pkg.name, lock.name)
 })
 

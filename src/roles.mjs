@@ -31,7 +31,7 @@ export const KNOWLEDGE_BASE = {
   'deepseek-official': {
     main: { model: 'deepseek-v4-pro', reasoningEffort: 'high' },
     worker: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
-    reviewer: { model: 'deepseek-v4-pro', reasoningEffort: 'xhigh' },
+    reviewer: { model: 'deepseek-v4-pro', reasoningEffort: 'max' },
   },
   'kimi-coding': {
     'long-context': { model: 'k3', reasoningEffort: null },

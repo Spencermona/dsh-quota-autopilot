@@ -15,8 +15,9 @@
 //   - provides the `autopilot` service: status() / advise() / roles() /
 //     calibration() / dataDir.
 //
-// Advisory only — this plugin NEVER calls any API that changes routing.
-// Everything user-visible is English; any API key output goes through
+// Advisory by default. Optional v0.3 automation is fail-closed (`off`) and only
+// changes request routing in explicit `enforce` mode; a live kill-switch file
+// disables it immediately. Everything user-visible is English; API keys go through
 // redactKey(). All cordis services are read optionally via ctx.get().
 
 import fs from 'node:fs'
@@ -36,6 +37,7 @@ import { evalState } from './src/state.mjs'
 import { appendShadow } from './src/shadow.mjs'
 import { quotaSnapshot, deepseekTodayUsd, stripStale } from './src/quota.mjs'
 import { mountPanel } from './src/panel.mjs'
+import { normalizeAutomationMode, decideAutomation, applyAutomationTarget } from './src/automation.mjs'
 
 export const name = 'autopilot'
 // Everything is optional: the plugin degrades gracefully without llm /
@@ -59,6 +61,11 @@ export const Config = z.object({
     staleAfterMin: z.number().min(1).default(DEFAULT_CONFIG.poll.staleAfterMin),
   }).default({}),
   dailyBudgetUsd: z.number().default(DEFAULT_CONFIG.dailyBudgetUsd),
+  automation: z.object({
+    mode: z.string().default(DEFAULT_CONFIG.automation.mode),
+    killSwitchFile: z.string().default(DEFAULT_CONFIG.automation.killSwitchFile),
+    logFile: z.string().default(DEFAULT_CONFIG.automation.logFile),
+  }).default({}),
   panel: z.object({}).default({}),
   calibration: z.object({
     minSpanHours: z.number().default(DEFAULT_CONFIG.calibration.minSpanHours),
@@ -111,6 +118,9 @@ function validateConfig(cfg, notes) {
     notes.push('config roles invalid (not an object): reset to default {}')
     cfg.roles = {}
   }
+  const mode = normalizeAutomationMode(cfg.automation?.mode)
+  if (mode !== cfg.automation?.mode) notes.push(`config automation.mode invalid (${String(cfg.automation?.mode)}): reset to off`)
+  cfg.automation = { ...DEFAULT_CONFIG.automation, ...(cfg.automation || {}), mode }
 }
 
 // --- dshHome / dataDir resolution -------------------------------------------
@@ -189,6 +199,12 @@ export async function apply(ctx, config) {
   const db = openLedger(path.join(dataDir, 'ledger.db'))
   const calibrationFile = path.join(dataDir, 'calibration.json')
   const shadowFile = path.join(dataDir, 'shadow-log.jsonl')
+  const resolveAutomationPath = (value, fallback) => {
+    const chosen = typeof value === 'string' && value ? value : fallback
+    return path.isAbsolute(chosen) ? chosen : path.join(dataDir, chosen)
+  }
+  const automationKillSwitchFile = resolveAutomationPath(cfg.automation.killSwitchFile, 'automation-kill-switch')
+  const automationLogFile = resolveAutomationPath(cfg.automation.logFile, 'automation-log.jsonl')
   const sessionsRoot = path.join(dshHome, 'sessions')
 
   let lastPoll = null // { kimi, deepseek, keyHints } from the most recent pollAll
@@ -335,6 +351,54 @@ export async function apply(ctx, config) {
     return out
   }
 
+  function automationStatus() {
+    const killed = fs.existsSync(automationKillSwitchFile)
+    return {
+      mode: cfg.automation.mode,
+      effectiveMode: killed ? 'off' : cfg.automation.mode,
+      killed,
+      killSwitchFile: automationKillSwitchFile,
+      logFile: automationLogFile,
+    }
+  }
+
+  // agent/request carries no task text; its waterfall next() resolves the call
+  // config. v0.3 therefore automates only quota/budget safety failover; task classification
+  // remains explicit through advise(). The default mode is off.
+  if (cfg.automation.mode !== 'off' && typeof ctx.on === 'function') {
+    ctx.on('agent/request', async (payload, next) => {
+      const original = await next()
+      const a = automationStatus()
+      if (a.killed) return original
+      try {
+        const fullQuota = snapshotWithCost()
+        const { quota: safeQuota } = stripStale(fullQuota)
+        const quotaState = evalState(safeQuota, cfg)
+        const rolesResult = await getRoles()
+        const decision = decideAutomation(original, rolesResult.roles, safeQuota, quotaState, cfg)
+        if (!decision) return original
+        const entry = {
+          ts: Date.now(),
+          kind: 'automation',
+          mode: cfg.automation.mode,
+          quotaState,
+          reason: decision.reason,
+          turn: payload?.turn ?? null,
+          step: payload?.step ?? null,
+          from: { provider: original.provider, model: original.model },
+          to: { provider: decision.target.provider, model: decision.target.model },
+        }
+        fs.appendFileSync(automationLogFile, JSON.stringify(entry) + '\n', 'utf8')
+        return cfg.automation.mode === 'enforce'
+          ? applyAutomationTarget(original, decision.target)
+          : original
+      } catch (e) {
+        console.warn(`WARN autopilot automation skipped: ${e.message}`)
+        return original
+      }
+    })
+  }
+
   const service = {
     status() {
       if (!rolesCache.value) getRoles().catch(() => {}) // warm the cache in the background
@@ -354,6 +418,7 @@ export async function apply(ctx, config) {
         poll: lastPoll ? { kimi: lastPoll.kimi, deepseek: lastPoll.deepseek } : null,
         keyHints: lastPoll?.keyHints ?? redactedKeyHints(dshHome, cfg),
         dataDir,
+        automation: automationStatus(),
         notes,
       }
     },

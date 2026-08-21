@@ -1,7 +1,7 @@
 {
   "name": "dsh-quota-autopilot",
-  "version": "0.2.0",
-  "description": "Quota-aware model routing advisor for dsh (DeepSeek Harness): polls provider quotas, auto-learns your subscription's point-to-token ratio, recommends role-based routes, and shows a composer-dock quota pill in the web profile. Advisory only — it never changes actual routing.",
+  "version": "0.3.0",
+  "description": "Quota-aware routing advisor for dsh with an opt-in, fail-closed automatic safety router, live kill switch, local ledger, calibration, and Web quota pill.",
   "type": "module",
   "main": "index.mjs",
   "exports": {

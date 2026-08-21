@@ -27,9 +27,10 @@ function mockCtx(services = {}) {
   const provided = {}
   const tools = []
   const cleanups = []
+  const listeners = {}
   const ctx = {
     get: (n) => services[n],
-    on: () => () => {},
+    on: (name, fn) => { (listeners[name] ??= []).push(fn); return () => {} },
     effect: (fn) => {
       const d = fn()
       if (typeof d === 'function') cleanups.push(d)
@@ -44,7 +45,7 @@ function mockCtx(services = {}) {
     },
     tools: { register: (def) => { tools.push(def); return () => {} } },
   }
-  return { ctx, provided, tools, cleanups }
+  return { ctx, provided, tools, cleanups, listeners }
 }
 
 const fullLlm = {
@@ -287,10 +288,13 @@ test('panel: mounts /autopilot/api/status only when webServer is present', async
   await route.handler({ method: 'GET' }, { writeHead: () => {}, end: (s) => { body = s } })
   const j = JSON.parse(body)
   assert.ok(j.panel && typeof j.panel.staleMs === 'number')
+  assert.equal(j.panel.dailyCapUsd, 5) // follows the single dailyBudgetUsd by default
   assert.ok(j.kimi && 'weekly' in j.kimi && 'rolling5h' in j.kimi)
   assert.ok('balanceUsd' in j.deepseek)
   assert.ok('todayUsd' in j.cost && 'incomplete' in j.cost)
   assert.ok('codex' in j && 'local' in j)
+  assert.equal(j.automation.mode, 'off')
+  assert.equal(j.automation.effectiveMode, 'off')
   assert.equal(j.updatedAt === null || typeof j.updatedAt === 'number', true)
   // codex/local probing disabled in this test -> null, not absent
   assert.equal(j.codex, null)
@@ -316,4 +320,51 @@ test('panel: absent webServer -> no route, plugin still mounts', async () => {
   assert.equal(svc.status().ok, true) // mounts and serves status without webServer
 
   for (const c of cleanups) c()
+})
+
+test('automation: off is inert; shadow logs; enforce switches; kill-switch is immediate', async () => {
+  const make = async (mode) => {
+    const dir = tmpdir()
+    const dshHome = path.join(dir, 'dsh-home')
+    const dataDir = path.join(dir, 'data')
+    fs.mkdirSync(dshHome, { recursive: true })
+    const mock = mockCtx({ llm: fullLlm })
+    await hostPlugin.apply(mock.ctx, { dshHome, dataDir, automation: { mode } })
+    const db = openLedger(path.join(dataDir, 'ledger.db'))
+    const now = Date.now()
+    db.prepare(`INSERT INTO account_snapshots(collected_at,provider,window_type,"limit",remaining) VALUES(?,?,?,?,?)`)
+      .run(now, 'kimi-coding', 'weekly', 100, 1)
+    db.prepare(`INSERT INTO account_snapshots(collected_at,provider,window_type,"limit",remaining) VALUES(?,?,?,?,?)`)
+      .run(now, 'kimi-coding', 'rolling_5h', 100, 1)
+    db.prepare(`INSERT INTO account_snapshots(collected_at,provider,window_type,"limit",remaining) VALUES(?,?,?,?,?)`)
+      .run(now, 'deepseek-official', 'balance', null, 10)
+    db.close()
+    return { ...mock, dataDir }
+  }
+
+  const off = await make('off')
+  assert.equal(off.listeners['agent/request'], undefined)
+  assert.equal(off.provided.autopilot.status().automation.effectiveMode, 'off')
+  for (const c of off.cleanups) c()
+
+  const shadow = await make('shadow')
+  const original = { provider: 'kimi-coding', model: 'k3', reasoningEffort: 'high' }
+  const shadowOut = await shadow.listeners['agent/request'][0]({ turn: 1, step: 2 }, async () => original)
+  assert.deepEqual(shadowOut, original)
+  const logFile = path.join(shadow.dataDir, 'automation-log.jsonl')
+  assert.ok(fs.existsSync(logFile))
+  assert.equal(JSON.parse(fs.readFileSync(logFile, 'utf8').trim()).mode, 'shadow')
+  fs.writeFileSync(path.join(shadow.dataDir, 'automation-kill-switch'), '')
+  assert.equal(shadow.provided.autopilot.status().automation.effectiveMode, 'off')
+  const before = fs.readFileSync(logFile, 'utf8')
+  await shadow.listeners['agent/request'][0]({ turn: 2, step: 1 }, async () => original)
+  assert.equal(fs.readFileSync(logFile, 'utf8'), before)
+  for (const c of shadow.cleanups) c()
+
+  const enforce = await make('enforce')
+  const enforced = await enforce.listeners['agent/request'][0]({ turn: 1, step: 1 }, async () => original)
+  assert.equal(enforced.provider, 'deepseek-official')
+  assert.equal(enforced.model, 'deepseek-v4-flash')
+  assert.equal(enforced.reasoningEffort, 'low')
+  for (const c of enforce.cleanups) c()
 })
