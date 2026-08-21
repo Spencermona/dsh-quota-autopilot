@@ -56,18 +56,18 @@
 
 | # | 检查项 | 状态 | 证据 |
 |---|---|---|---|
-| 5.1 | 从零安装 v0.2.0 包并挂载 host/client | ✅ | pnpm 隔离 profile 安装成功；host 日志 `autopilot mounted` + `panel mounted at /autopilot/api/status`；发布后再以 GitHub tag 复验 |
+| 5.1 | 从零安装 v0.2.0 包并挂载 host/client | ✅ | 发布后从 `github:Spencermona/dsh-quota-autopilot#v0.2.0` 全新安装成功；installed package version=0.2.0；host/panel 正常挂载 |
 | 5.2 | 真实快照入库 + freshness 生效 | ✅ | API 实测 Kimi weekly=22/rolling=89、DeepSeek balance=$15.10，三源 `collectedAt/ageMs/stale=false`；写入独立 dataDir |
 | 5.3 | GUI client 无构建加载 | ✅ | `GET /autopilot/api/status` 200 JSON；`/plugins/dsh-quota-autopilot/client.js` 200；`__DSH_BOOT__` 含 `dsh-quota-autopilot` |
 | 5.4 | 无独立 dsh-quota-panel 仍正常 | ✅ | 隔离 profile 仅安装 autopilot；boot 仅含新 client，API 不读取 quota-status.json |
 | 5.5 | Auto preset 可发现 | ✅ | install.mjs 实际复制后 `agentPreset.list` HTTP 200，返回 `auto`（trust=user） |
 | 5.6 | 稳定性 | ✅ | v0.2 四组自动测试 44/44；隔离 web 多轮 1min poll 无崩溃；复用 v0.1.0/独立 panel 既有 61min soak 证据 |
-| 5.7 | 卸载无残留 | ⏳ | 发布 tag 后执行 GitHub 安装→卸载终验 |
+| 5.7 | 卸载无残留 | ✅ | 发布 tag 安装后执行 uninstall + 删除 patch row + `dsh plugin remove`；重启 root=200、boot 无 autopilot client、API 不再返回 JSON |
 
 ## 6. 发布动作（人工）
 
-- [ ] GitHub 打 tag `v0.2.0` 并推送（README 安装命令已指向该 tag）
+- [x] GitHub 已推送 main commit `9fa4d3d` 并创建 tag `v0.2.0`；GitHub tag 直装终验通过
 - [ ] `npm publish`（可选；仍需 npm 账号）
 - [ ] 提交 dsh-market / awesome 清单（可选）
 
-> 说明：§3 自动测试与 §4 文档项为本轮已实测/已完成；§5 真实 profile 验收（5.1–5.7）**未**在本轮执行，请勿视为已验证。
+> 说明：§3 自动测试、§4 文档与 §5 隔离 web profile 验收均已完成；npm/market 发布仍为可选后续动作，不阻塞 GitHub v0.2.0。
