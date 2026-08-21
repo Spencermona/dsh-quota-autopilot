@@ -1,4 +1,4 @@
-# v0.3.0 pre-deployment acceptance
+# v0.3.0 shadow-staging acceptance
 
 ## Scope
 
@@ -25,12 +25,14 @@
 - Package shape: 4/4 passed.
 - Legacy shadow router: 12/12 passed.
 - `git diff --check`: clean (only Windows line-ending notices).
+- Two independent safety reviews: GO after fixes; no blocker.
+- Commit `02d6d75` pushed to `origin/main` and installed in the real Web profile by immutable commit spec.
+- Restarted production reports package `0.3.0`, API/GUI HTTP 200, `automation.mode=shadow`, `effectiveMode=shadow`, `dailyCapUsd=5`, fresh ledger/quota/cost data.
+- Production kill-switch exercised live: creating the file changed `effectiveMode` to `off` without restart; deleting it restored `shadow`.
+- No production automation candidate has occurred yet (`automation-log.jsonl` absent), which matches the current healthy Kimi windows and DeepSeek cost below $5.
 
-## Production gate still required
+## Remaining gate before `enforce`
 
-1. Independent code review has no blocker.
-2. Commit v0.3.0, install into the real Web profile with `automation.mode: shadow`.
-3. Confirm `/autopilot/api/status`, GUI client, ledger freshness, and `automation-log.jsonl` under real traffic.
-4. Exercise the kill-switch in shadow mode and verify `effectiveMode: off` without restart.
-5. Remove/disable the legacy mixed-preset `quota-mgr` request hook before enabling `enforce`; two waterfalls must never compete.
-6. Keep `enforce` disabled until the shadow evidence is reviewed.
+1. Soak in `shadow` until at least one real candidate is observed and reviewed.
+2. Remove/disable the legacy mixed-preset `quota-mgr` request hook; two waterfalls must never compete.
+3. Keep `enforce` disabled until both gates pass.
